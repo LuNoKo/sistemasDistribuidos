@@ -6,7 +6,7 @@ import sys
 
 # --- CONFIGURAÇÕES DA REQUISIÇÃO ---
 NODE_TO_SEND_REQ = 'A' # A B C D
-COMMAND = 'upload' # upload - download - list
+COMMAND = 'download' # upload - download - list
 FILE = 'teste.txt'
 
 
@@ -33,7 +33,7 @@ def send_request(node_id, data):
         s.sendall(pickle.dumps(data))
         
         full_response = b''
-        s.settimeout(10.0) 
+        # s.settimeout(10.0) 
         while True:
             chunk = s.recv(BUFFER_SIZE)
             if not chunk: break
@@ -57,13 +57,13 @@ def main():
     command = COMMAND
     dir = os.path.dirname(os.path.abspath(__file__)) + '\\'
     file_path = dir + FILE
+    file_name = os.path.basename(file_path)
 
     if command == "upload" and file_path:
         if not os.path.exists(file_path):
             print(f"Arquivo não encontrado: {file_path}")
             return
 
-        file_name = os.path.basename(file_path)
         with open(file_path, 'rb') as f:
             content = f.read()
 
@@ -78,8 +78,8 @@ def main():
         print(f"Resposta do Servidor: {response.get('message', 'Sem mensagem.')}")
     elif command == "download" and file_path:
         request = {
-        "comando": "DOWNLOAD",
-        "nome_arquivo": file_name
+            "comando": "DOWNLOAD",
+            "nome_arquivo": file_name
         }
         
         print(f"📥 Solicitando arquivo '{file_name}' ao Nó {node_id}...")

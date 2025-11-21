@@ -1,17 +1,15 @@
 # Node.py
 import socket
-import threading
+import select  # Substitui threading
 import pickle
 import os
 import sys
 from collections import defaultdict
 
-# --- CONFIGURAÇÕES GLOBAIS PARAMETRIZÁVEIS ---
-FRAG_SIZE = 64  # Tamanho do fragmento em bytes
+FRAG_SIZE = 64
 BUFFER_SIZE = 4096
 IP = '127.0.0.1'
 
-# Mapeamento do ID do Nó para a PORTA TCP
 NODE_PORTS = {
     'A': 5001,
     'B': 5002,
@@ -19,42 +17,26 @@ NODE_PORTS = {
     'D': 5004,
 }
 
-# Mapeamento estático para simular a topologia em anel (ID -> ID do Sucessor)
-# Isso permite que a topologia seja alterada centralmente.
 RING_TOPOLOGY = {
-    'A': 'B',  # A -> B
-    'B': 'C',  # B -> C
-    'C': 'D',  # C -> D
-    'D': 'A'   # D -> A
+    'A': 'B',
+    'B': 'C',
+    'C': 'D',
+    'D': 'A' 
 }
 # -----------------------------------------------
 
 class DistributedNode:
     def __init__(self, node_id):
         self.node_id = node_id
-        if node_id not in NODE_PORTS:
-            raise ValueError(f"ID de nó '{node_id}' inválido. IDs válidos: {list(NODE_PORTS.keys())}")
-        
         self.port = NODE_PORTS[node_id]
         sucessor_id = RING_TOPOLOGY[node_id]
         self.sucessor_port = NODE_PORTS[sucessor_id]
         self.addr = (IP, self.port)
         
-        # { nome_arquivo: { pos_frag: { 'data': bytes, 'total': int } } }
-
         self.storage = defaultdict(dict)
         self.known_files = set()
         print(f"Nó {self.node_id} ({self.port}) iniciado. Sucessor: {sucessor_id} ({self.sucessor_port})")
 
-    # [RESTO DA CLASSE DistributedNode PERMANECE O MESMO]
-    # (As funções _connect_to_node, _get_active_successor, _send_to_successor,
-    # handle_upload, handle_download, _request_fragments_from_ring,
-    # handle_ring_request, handle_list, handle_client, e start_server
-    # permanecem inalteradas, utilizando as variáveis de instância self.port
-    # e self.sucessor_port, que agora são lidas das variáveis globais.)
-
-    # Apenas para garantir a integridade, o restante das funções:
-    
     def _connect_to_node(self, port_destino):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -199,9 +181,7 @@ class DistributedNode:
                     collected_fragments.append({'posicao': pos, 'data': frag_data['data'], 'total': frag_data['total']})
             
             if self.sucessor_port == origem_port:
-                # O ciclo terminou! Retorna a lista consolidada para a origem.
                 print(f"🔁 Ciclo de busca finalizado. Retornando para {origem_port}.")
-                # O nó que chamou esta função precisa devolver a resposta para o nó anterior
                 return {"fragments": collected_fragments} 
 
             ring_request = {
@@ -248,12 +228,22 @@ class DistributedNode:
             return {"status": "OK", "files": list(self.known_files)}
             
     def handle_client(self, conn, addr):
+        """
+        Processa a requisição de um cliente de forma síncrona (sem loop infinito).
+        Lê todos os dados disponíveis, processa e retorna.
+        """
         try:
             full_data = b''
+            # Loop para garantir a leitura completa da mensagem serializada
             while True:
                 chunk = conn.recv(BUFFER_SIZE)
                 if not chunk: break
                 full_data += chunk
+                # Pequena otimização: se o buffer recebido for menor que o max, 
+                # provavelmente acabou a mensagem (embora TCP não garanta isso, 
+                # funciona para pickles pequenos/médios em localhost)
+                if len(chunk) < BUFFER_SIZE: 
+                    break
             
             if not full_data: return
             
@@ -263,14 +253,13 @@ class DistributedNode:
             response = None
             
             if comando == "UPLOAD":
-                print(f"UPLOAD")
+                print(f"UPLOAD recebido de {addr}")
                 response = self.handle_upload(data)
             elif comando == "DOWNLOAD":
                 response = self.handle_download(data['nome_arquivo'])
             elif comando == "LIST":
                 response = self.handle_list()
             elif comando == "BUSCA_FRAGMENTO_ANEL":
-                # Resposta para busca no anel
                 response = self.handle_ring_request(data) 
             elif comando == "REPLICAR_FRAGMENTO":
                 self.handle_ring_request(data)
@@ -281,44 +270,76 @@ class DistributedNode:
         except Exception as e:
             print(f"Erro no manuseio da conexão de {addr}: {e}")
         finally:
+            # No modelo sem thread, fechamos a conexão após processar o comando
             conn.close()
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(self.addr)
         server.listen(5)
-        
-        server.settimeout(10.0) 
-        
+        server.setblocking(False)
+
+        inputs = [server]
+        clients = {}
+
         print(f"Servidor {self.node_id} ouvindo em {self.addr}")
 
-        while True:
+        while inputs:
             try:
-                conn, addr = server.accept()
-                thread = threading.Thread(target=self.handle_client, args=(conn, addr))
-                thread.start()
-            
-            except socket.timeout:
-                pass
+                # select.select monitora a lista 'inputs'.
+                # readable: lista de soquetes prontos para leitura
+                readable, _, _ = select.select(inputs, [], [], 1.0)
+                
 
-            
+                for s in readable:
+                    if s is server:
+                        print('aqui')
+                        # Caso 1: O soquete 'server' está pronto, significa nova conexão chegando
+                        conn, addr = s.accept()
+                        # Mantemos o socket do cliente bloqueante para simplificar a leitura (recv loop)
+                        # dentro do handle_client, garantindo que a mensagem inteira chegue.
+                        conn.setblocking(True) 
+                        inputs.append(conn)
+                        clients[conn] = addr
+                    else:
+                        # Caso 2: Um cliente conectado enviou dados
+                        print('aqui2')
+                        addr = clients.get(s)
+                        # Processamos a requisição imediatamente
+                        self.handle_client(s, addr)
+                        
+                        # Como handle_client fecha a conexão (protocolo simples request-response),
+                        # removemos das listas de monitoramento
+                        if s in inputs:
+                            inputs.remove(s)
+                        if s in clients:
+                            del clients[s]
+                        
             except KeyboardInterrupt:
                 print(f"\n🛑 Servidor {self.node_id} encerrado por KeyboardInterrupt.")
                 break
             except Exception as e:
                 print(f"Erro inesperado no loop principal: {e}")
+                # Tenta limpar soquetes quebrados para não travar o select
+                if 's' in locals() and s in inputs:
+                    inputs.remove(s)
+                    s.close()
                 
         server.close()
 
 if __name__ == '__main__':
+
     if len(sys.argv) < 2:
         print(f"Uso: python Node.py <ID_DO_NÓ>")
         print(f"IDs disponíveis: {list(NODE_PORTS.keys())}")
         sys.exit(1)
-        
+
     node_id = sys.argv[1].upper()
+
+    if node_id not in NODE_PORTS:
+        raise ValueError(f"ID de nó '{node_id}' inválido. IDs válidos: {list(NODE_PORTS.keys())}")
+
     try:
         node = DistributedNode(node_id)
         node.start_server()
