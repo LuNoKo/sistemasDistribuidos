@@ -6,7 +6,7 @@ import sys
 
 # --- CONFIGURAÇÕES DA REQUISIÇÃO ---
 NODE_TO_SEND_REQ = 'A' # A B C D
-COMMAND = 'download' # upload - download - list
+COMMAND = 'upload' # upload - download - list
 FILE = 'teste.txt'
 
 
