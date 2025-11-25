@@ -2,12 +2,11 @@
 import socket
 import pickle
 import os
-import sys
 
 # --- CONFIGURAÇÕES DA REQUISIÇÃO ---
-NODE_TO_SEND_REQ = 'A' # A B C D
-COMMAND = 'upload' # upload - download - list
-FILE = 'teste.txt'
+NODE_TO_SEND_REQ = 'D' # A B C D
+COMMAND = 'list' # upload - download - list
+FILE = 'teste2.txt'
 
 
 # --- CONFIGURAÇÕES GLOBAIS ---
@@ -57,7 +56,7 @@ def main():
     command = COMMAND
     dir = os.path.dirname(os.path.abspath(__file__)) + '\\'
     file_path = dir + FILE
-    file_name = os.path.basename(file_path)
+    nome_arquivo = os.path.basename(file_path)
 
     if command == "upload" and file_path:
         if not os.path.exists(file_path):
@@ -69,31 +68,29 @@ def main():
 
         request = {
             "comando": "UPLOAD",
-            "nome_arquivo": file_name,
+            "nome_arquivo": nome_arquivo,
             "conteudo_bytes": content
         }
 
-        print(f"📦 Enviando arquivo '{file_name}' ({len(content)} bytes) para o Nó {node_id}...")
+        print(f"📦 Enviando arquivo '{nome_arquivo}' ({len(content)} bytes) para o Nó {node_id}...")
         response = send_request(node_id, request)
         print(f"Resposta do Servidor: {response.get('message', 'Sem mensagem.')}")
     elif command == "download" and file_path:
         request = {
             "comando": "DOWNLOAD",
-            "nome_arquivo": file_name
+            "nome_arquivo": nome_arquivo
         }
         
-        print(f"📥 Solicitando arquivo '{file_name}' ao Nó {node_id}...")
+        print(f"📥 Solicitando arquivo '{nome_arquivo}' ao Nó {node_id}...")
         response = send_request(node_id, request)
         
-        if response.get("status") == "OK":
-            content = response['conteudo_bytes']
-            with open(f"RECUPERADO_{response['file_name']}", 'wb') as f:
-                f.write(content)
-            print(f"✅ Arquivo '{file_name}' recuperado e salvo como 'RECUPERADO_{response['file_name']}' ({len(content)} bytes).")
-        else:
-            print(f"❌ Erro ao baixar: {response.get('message', 'Erro desconhecido')}")
+        content = response['conteudo_bytes']
+        with open(f"RECUPERADO_{response['nome_arquivo']}", 'wb') as f:
+            f.write(content)
+        print(f"✅ Arquivo '{nome_arquivo}' recuperado e salvo como 'RECUPERADO_{response['nome_arquivo']}' ({len(content)} bytes).")
+    
     elif command == "list":
-        request = {"comando": "LIST"}
+        request = {"comando": "LISTAR_FRAGMENTOS"}
 
         print(f"📜 Solicitando lista de arquivos ao Nó {node_id}...")
         response = send_request(node_id, request)
