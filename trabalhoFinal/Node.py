@@ -3,15 +3,14 @@ import pickle
 import sys
 
 # --- CONFIGURAÇÕES ---
-# Topologia: A -> B -> C -> D -> A
 QUEM_E_O_PROXIMO = {'A': 'B', 'B': 'C', 'C': 'D', 'D': 'A'}
 PORTAS = {'A': 5001, 'B': 5002, 'C': 5003, 'D': 5004}
 MEU_IP = '127.0.0.1'
 BUFFER_SIZE = 4096
-FRAG_SIZE = 64 # Tamanho pequeno para forçar a fragmentação e testar
+FRAG_SIZE = 64
 
 # --- ESTADO ---
-MEUS_ARQUIVOS = [] # Lista de dicionários
+MEUS_ARQUIVOS = []
 
 # --- INICIALIZAÇÃO ---
 if len(sys.argv) < 2:
@@ -24,23 +23,19 @@ PROXIMO_ID = QUEM_E_O_PROXIMO.get(MEU_ID, 'A')
 PORTA_DO_PROXIMO = PORTAS.get(PROXIMO_ID, 5000)
 
 print(f"--- NÓ {MEU_ID} RODANDO NA PORTA {MINHA_PORTA} ---")
-# print(f"➡️ Vizinho: {PROXIMO_ID} ({PORTA_DO_PROXIMO})")
 
 servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 servidor.bind((MEU_IP, MINHA_PORTA))
 servidor.listen(5)
 
 def get_porta_proximo_node(portas_para_ignorar=[]):
-    """Retorna a porta do próximo nó ativo."""
     nos_offline_desta_busca = []
     proximo_id = QUEM_E_O_PROXIMO[MEU_ID]
-    # Tenta conectar no sucessor imediato. Se falhar, pula para o próximo (lógica simplificada)
+    
     for _ in range(len(PORTAS)):
         porta_candidata = PORTAS[proximo_id]
 
-        # 1. VERIFICA SE DEVE IGNORAR (Correção: usar 'in' e não '==')
         if porta_candidata in portas_para_ignorar:
-            # Pula para o próximo ID sem nem tentar conectar
             proximo_id = QUEM_E_O_PROXIMO[proximo_id]
             continue
 
@@ -56,7 +51,6 @@ def get_porta_proximo_node(portas_para_ignorar=[]):
     print("Nenhum outro nó está online...")
     return porta_candidata, nos_offline_desta_busca
 
-
 # --- LOOP PRINCIPAL ---
 while True:
     try:
@@ -69,7 +63,7 @@ while True:
             chunk = conexao.recv(BUFFER_SIZE)
             if not chunk: break
             dados_buffer += chunk
-            if len(chunk) < BUFFER_SIZE: break # Break simples se o pacote for pequeno
+            if len(chunk) < BUFFER_SIZE: break
         
         if not dados_buffer:
             conexao.close()
@@ -100,39 +94,30 @@ while True:
             for i in range(total_frags):
                 pedaco = conteudo[i*FRAG_SIZE : (i+1)*FRAG_SIZE]
                 
-                # Salva na memória
-                # MEUS_ARQUIVOS.append({
-                #     "nome_arquivo": nome,
-                #     "posicao": i,
-                #     "fragmento_bytes": pedaco,
-                #     "total_fragmentos": total_frags
-                # })
-                
-                # Prepara lista para mandar pro vizinho depois
                 fragmentos_para_enviar.append({
                     "comando": "REPLICAR",
                     "nome_arquivo": nome,
                     "posicao": i,
                     "fragmento_bytes": pedaco,
                     "total_fragmentos": total_frags,
-                    "qnt_nodes_que_salvaram": 1 # Eu sou o 1º
+                    "qnt_nodes_que_salvaram": 1
                 })
 
-            # 2. RESPOSTA IMEDIATA AO CLIENTE (FIM DO LOOPING)
-            # Avisa que deu certo e fecha a conexão com o cliente
             resp = {"status": "OK", "msg": f"Nó {MEU_ID} salvou o arquivo."}
             conexao.sendall(pickle.dumps(resp))
-            conexao.close() # <--- O SEGREDO ESTÁ AQUI. Libera o cliente.
+            conexao.close()
             
             print("✅ Cliente liberado. Iniciando replicação em background...")
 
-            # 3. REPLICAÇÃO PARA O VIZINHO (Sem travar o cliente)
+            # REPLICAÇÃO PARA O VIZINHO
             porta_proximo_node = MINHA_PORTA
             portas_para_ignorar = []
             try:
                 for frag in fragmentos_para_enviar:
                     for i in range(2):
-                        if porta_proximo_node == MINHA_PORTA: 
+                        ja_tenho = any(a['nome_arquivo'] == frag['nome_arquivo'] and a['posicao'] == frag['posicao'] for a in MEUS_ARQUIVOS)
+
+                        if porta_proximo_node == MINHA_PORTA and not ja_tenho: 
                             MEUS_ARQUIVOS.append({
                                 "nome_arquivo": frag['nome_arquivo'],
                                 "posicao": frag['posicao'],
@@ -159,7 +144,7 @@ while True:
             continue 
 
         # ---------------------------------------------------------
-        # LÓGICA DE REPLICAR (Recebe do Vizinho)
+        # LÓGICA DE REPLICAR
         # ---------------------------------------------------------
         elif comando == 'REPLICAR':
             nome = mensagem['nome_arquivo']
@@ -193,11 +178,10 @@ while True:
         # LÓGICA DE DOWNLOAD
         # ---------------------------------------------------------
         elif comando == 'DOWNLOAD':
-
             portas_para_ignorar = [MINHA_PORTA]
             nome_arquivo = mensagem['nome_arquivo']
 
-            # 1. Coleta o que tem localmente (Isso estava certo)
+            # Coleta o que tem localmente
             fragmentos = []
             for item in MEUS_ARQUIVOS:
                 if item['nome_arquivo'] == nome_arquivo:
@@ -207,21 +191,21 @@ while True:
                         'total': item['total_fragmentos']
                     })
 
-            # --- Lógica segura para saber se precisa buscar ---
+            # Verificar se precisa buscar em outros nós
             precisa_buscar = False
             if not fragmentos:
-                precisa_buscar = True # Se não tenho nada, busco
+                precisa_buscar = True
             elif len(fragmentos) < fragmentos[0]['total']:
-                precisa_buscar = True # Se tenho incompleto, busco
+                precisa_buscar = True
 
-            # 2. Busca no anel se necessário
+            # Busca no anel se necessário
             while precisa_buscar:
                 porta_proximo_node, lista_offline = get_porta_proximo_node(portas_para_ignorar)
                 portas_para_ignorar.extend(lista_offline)
                 print(f"🔍 Buscando partes faltantes de '{nome_arquivo}' no anel na porta {porta_proximo_node}...")
 
                 req = {
-                    "comando": "BUSCAR_ANEL", # Use um nome consistente (RECUPERAR ou BUSCAR)
+                    "comando": "BUSCAR_ANEL",
                     "nome_arquivo": nome_arquivo,
                 }
 
@@ -237,36 +221,33 @@ while True:
                         resp_bytes += chunk
                     s.close()
                     
-                    # --- CORREÇÃO 3: Pega a chave certa da resposta ---
-                    # A resposta deve conter a lista 'fragments' atualizada pelos outros nós
+                    # Adiciona nos fragmentos
                     resposta_anel = pickle.loads(resp_bytes)
                     fragmentos = list({item['posicao']: item for item in fragmentos + resposta_anel.get('fragments', fragmentos)}.values())
 
                 except Exception as e:
                     print(f"Erro ao buscar no anel: {e}")
 
+                # Solicita para todos do anel os fragmentos do arquivo solicitado
                 if len(portas_para_ignorar) < len(PORTAS) - 1:
                     portas_para_ignorar.append(porta_proximo_node)
                 else:
                     precisa_buscar = False
 
-            # --- CORREÇÃO 4: Validação final ---
+                # Para de solicitar se já chegou todos os fragmentos
+                if len(fragmentos) < fragmentos[0]['total']:
+                    precisa_buscar = False
+
             if not fragmentos:
                 resposta = {"status": "ERRO", "msg": "Arquivo não encontrado."}
                 conexao.sendall(pickle.dumps(resposta))
-                # continue ou return aqui
-            
-            # --- CORREÇÃO 2: ORDENAÇÃO OBRIGATÓRIA ---
-            # Garante que a posição 0 vem antes da 1, etc.
-            fragmentos.sort(key=lambda x: x['posicao'])
 
-            # Verifica integridade
             total_esperado = fragmentos[0]['total']
             if len(fragmentos) != total_esperado:
                 print(f"⚠️ Arquivo incompleto: Tenho {len(fragmentos)} de {total_esperado}")
                 resposta = {"status": "ERRO", "msg": "Arquivo incompleto."}
             else:
-                # Junta tudo
+                fragmentos.sort(key=lambda x: x['posicao'])
                 conteudo_final = b''.join(f['data'] for f in fragmentos)
                 
                 resposta = {
@@ -276,34 +257,31 @@ while True:
                 }
 
             conexao.sendall(pickle.dumps(resposta))
-        
+
+        # ---------------------------------------------------------
+        # LÓGICA DE BUSCAR NA REDE
+        # ---------------------------------------------------------
         elif comando == 'BUSCAR_ANEL':
             nome = mensagem['nome_arquivo']
             print(f"🔍 Recebi pedido de busca para '{nome}'. Verificando memória...")
 
-            # 1. Filtra os fragmentos que ESTE NÓ possui
-            # Precisamos converter o formato da memória (fragmento_bytes) 
-            # para o formato que o cliente espera (data)
             fragmentos_encontrados = []
             
             for item in MEUS_ARQUIVOS:
                 if item['nome_arquivo'] == nome:
                     fragmentos_encontrados.append({
                         'posicao': item['posicao'],
-                        'data': item['fragmento_bytes'],  # Cliente espera 'data'
-                        'total': item['total_fragmentos'] # Cliente espera 'total'
+                        'data': item['fragmento_bytes'],
+                        'total': item['total_fragmentos']
                     })
 
-            print(f"   ✅ Encontrei {len(fragmentos_encontrados)} fragmentos locais.")
+            print(f"✅ Encontrei {len(fragmentos_encontrados)} fragmentos locais.")
 
-            # 2. Monta a resposta
-            # A chave DEVE ser 'fragments' pois seu cliente usa .get('fragments')
             resposta = {
                 "status": "OK",
                 "fragments": fragmentos_encontrados
             }
 
-            # 3. Envia e encerra
             conexao.sendall(pickle.dumps(resposta))
             conexao.close()
 

@@ -80,6 +80,9 @@ def main():
             with open(os.path.join(dir_atual, nome_salvo), 'wb') as f:
                 f.write(resp['conteudo_bytes'])
             print(f"✅ Sucesso! Salvo como '{nome_salvo}'")
+        else:
+            resp = send_request(no_para_mandar_req, request)
+            print(f"Erro: {resp['msg']}")
 
     # --- LISTAR ---
     elif comando == "list_all":
