@@ -32,6 +32,7 @@ servidor.listen(5)
 
 def get_porta_proximo_node(portas_para_ignorar=[]):
     """Retorna a porta do próximo nó ativo."""
+    nos_offline_desta_busca = []
     proximo_id = QUEM_E_O_PROXIMO[MEU_ID]
     # Tenta conectar no sucessor imediato. Se falhar, pula para o próximo (lógica simplificada)
     for _ in range(len(PORTAS)):
@@ -48,11 +49,12 @@ def get_porta_proximo_node(portas_para_ignorar=[]):
             s.settimeout(0.5)
             s.connect((MEU_IP, porta_candidata))
             s.close()
-            return porta_candidata
+            return porta_candidata, nos_offline_desta_busca
         except:
+            nos_offline_desta_busca.append(porta_candidata)
             proximo_id = QUEM_E_O_PROXIMO[proximo_id]
     print("Nenhum outro nó está online...")
-    return porta_candidata
+    return porta_candidata, nos_offline_desta_busca
 
 
 # --- LOOP PRINCIPAL ---
@@ -143,12 +145,13 @@ while True:
                             s_vizinho.sendall(pickle.dumps(frag))
                             s_vizinho.close()
 
-                        if len(portas_para_ignorar) != 3:
+                        if len(portas_para_ignorar) < len(PORTAS) - 1:
                             portas_para_ignorar.append(porta_proximo_node)
                         else:
                             portas_para_ignorar = []
 
-                        porta_proximo_node = get_porta_proximo_node(portas_para_ignorar)
+                        porta_proximo_node, lista_offline = get_porta_proximo_node(portas_para_ignorar)
+                        portas_para_ignorar.extend(lista_offline)
                 print(f"➡️ Todos os fragmentos replicados para {PROXIMO_ID}.")
             except Exception as e:
                 print(f"⚠️ Erro ao replicar para vizinho: {e}")
@@ -181,16 +184,6 @@ while True:
                 })
                 print(f"💾 Réplica salva (Pos {pos}).")
                 
-                # Repassa para o próximo (Incrementando contador)
-                try:
-                    mensagem['qnt_nodes_que_salvaram'] += 1
-                    s_vizinho = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s_vizinho.connect((MEU_IP, PORTA_DO_PROXIMO))
-                    s_vizinho.sendall(pickle.dumps(mensagem))
-                    s_vizinho.close()
-                    print(f"➡️ Repassado para {PROXIMO_ID}.")
-                except:
-                    print(f"❌ Falha ao repassar réplica.")
             else:
                 print(f"⚠️ Réplica duplicada ignorada.")
 
@@ -223,7 +216,8 @@ while True:
 
             # 2. Busca no anel se necessário
             while precisa_buscar:
-                porta_proximo_node = get_porta_proximo_node(portas_para_ignorar)
+                porta_proximo_node, lista_offline = get_porta_proximo_node(portas_para_ignorar)
+                portas_para_ignorar.extend(lista_offline)
                 print(f"🔍 Buscando partes faltantes de '{nome_arquivo}' no anel na porta {porta_proximo_node}...")
 
                 req = {
@@ -251,7 +245,7 @@ while True:
                 except Exception as e:
                     print(f"Erro ao buscar no anel: {e}")
 
-                if len(portas_para_ignorar) != 3:
+                if len(portas_para_ignorar) < len(PORTAS) - 1:
                     portas_para_ignorar.append(porta_proximo_node)
                 else:
                     precisa_buscar = False
@@ -314,7 +308,7 @@ while True:
             conexao.close()
 
         # ---------------------------------------------------------
-        # LÓGICA DE LISTAGEM (DEBUG)
+        # LÓGICA DE LISTAGEM
         # ---------------------------------------------------------
         elif comando == 'LISTAR_FRAGMENTOS':
             print("\n" + "="*14 + f" Fragmentos no nodo {MEU_ID} " + "="*14)
@@ -333,16 +327,16 @@ while True:
                 
                 print(f"{nome:<20} | {pos:<5} | {total:<5} | {tamanho} bytes")
             print("="*50 + "\n")
-
         conexao.close()
 
     except KeyboardInterrupt:
         print("\nDesligando nó...")
+        try: conexao.close()
+        except: pass
         break
     except Exception as e:
-        print(f"Erro fatal no loop: {e}")
-        # Tenta fechar conexão se der erro pra não travar cliente
-        try: conexao.close() 
+        print(f"Erro fatal: {e}")
+        try: conexao.close()
         except: pass
 
 servidor.close()

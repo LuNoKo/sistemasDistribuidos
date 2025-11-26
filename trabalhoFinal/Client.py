@@ -1,11 +1,12 @@
 import socket
 import pickle
 import os
+import sys
 
 # --- CONFIGURAÇÕES ---
-NODE_TO_SEND_REQ = 'A' # Mude para A, B, C ou D para testar
-COMMAND = 'download'     # upload, download, list
-FILE = 'teste.txt'     # Nome do arquivo na mesma pasta do script
+COMMAND = 'download'     # upload, download, list_all
+NODE_TO_SEND_REQ = 'B' # Mude para A, B, C ou D para testar
+FILE = 'teste.txts'     # Nome do arquivo na mesma pasta do script
 
 NODE_PORTS = {
     'A': 5001, 'B': 5002, 'C': 5003, 'D': 5004
@@ -23,8 +24,7 @@ def send_request(node_id, data):
         s.connect((IP, port))
         s.sendall(pickle.dumps(data))
         
-        # --- TIMEOUT ATIVADO ---
-        # s.settimeout(5.0)
+        s.settimeout(5.0)
         
         full_response = b''
         while True:
@@ -45,48 +45,44 @@ def send_request(node_id, data):
         s.close()
 
 def main():
+    comando = sys.argv[1] if len(sys.argv) > 2  else COMMAND
+    no_para_mandar_req = sys.argv[2].upper() if len(sys.argv) > 3 else NODE_TO_SEND_REQ
+    arquivo = sys.argv[3] if len(sys.argv) == 4 else FILE
+
     dir_atual = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(dir_atual, FILE)
+    file_path = os.path.join(dir_atual, arquivo)
     
     # --- UPLOAD ---
-    if COMMAND == "upload":
-        if not os.path.exists(file_path):
-            # Cria um arquivo de teste se não existir
-            with open(file_path, 'wb') as f:
-                f.write(b"Conteudo de teste para sistemas distribuidos " * 50)
-            print(f"Arquivo '{FILE}' criado para teste.")
-
+    if comando == "upload":
         with open(file_path, 'rb') as f:
             content = f.read()
 
         request = {
             "comando": "UPLOAD",
-            "nome_arquivo": FILE,
+            "nome_arquivo": arquivo,
             "conteudo_bytes": content
         }
-        print(f"📦 UPLOAD '{FILE}' -> Nó {NODE_TO_SEND_REQ}...")
-        resp = send_request(NODE_TO_SEND_REQ, request)
-        print(f"Resposta: {resp}")
+        print(f"📦 UPLOAD '{arquivo}' -> Nó {no_para_mandar_req}...")
+        resp = send_request(no_para_mandar_req, request)
+        print(f"Resposta: {resp['msg']}")
 
     # --- DOWNLOAD ---
-    elif COMMAND == "download":
+    elif comando == "download":
         request = {
             "comando": "DOWNLOAD",
-            "nome_arquivo": FILE
+            "nome_arquivo": arquivo
         }
-        print(f"📥 DOWNLOAD '{FILE}' <- Nó {NODE_TO_SEND_REQ}...")
-        resp = send_request(NODE_TO_SEND_REQ, request)
+        print(f"📥 DOWNLOAD '{arquivo}' <- Nó {no_para_mandar_req}...")
+        resp = send_request(no_para_mandar_req, request)
         
         if resp.get("status") == "OK":
             nome_salvo = f"RECUPERADO_{resp['nome_arquivo']}"
             with open(os.path.join(dir_atual, nome_salvo), 'wb') as f:
                 f.write(resp['conteudo_bytes'])
             print(f"✅ Sucesso! Salvo como '{nome_salvo}'")
-        else:
-            print(f"❌ Erro: {resp.get('message')}")
 
     # --- LISTAR ---
-    elif COMMAND == "list":
+    elif comando == "list_all":
         print(f"📜 LISTANDO arquivos no Nó A...")
         resp = send_request('A', {"comando": "LISTAR_FRAGMENTOS"})
         print(resp)
