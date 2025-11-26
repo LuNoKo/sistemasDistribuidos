@@ -1,29 +1,21 @@
-# Client.py
 import socket
 import pickle
 import os
 
-# --- CONFIGURAÇÕES DA REQUISIÇÃO ---
-NODE_TO_SEND_REQ = 'D' # A B C D
-COMMAND = 'list' # upload - download - list
-FILE = 'teste2.txt'
+# --- CONFIGURAÇÕES ---
+NODE_TO_SEND_REQ = 'A' # Mude para A, B, C ou D para testar
+COMMAND = 'download'     # upload, download, list
+FILE = 'teste.txt'     # Nome do arquivo na mesma pasta do script
 
-
-# --- CONFIGURAÇÕES GLOBAIS ---
 NODE_PORTS = {
-    'A': 5001,
-    'B': 5002,
-    'C': 5003,
-    'D': 5004
+    'A': 5001, 'B': 5002, 'C': 5003, 'D': 5004
 }
 IP = '127.0.0.1'
 BUFFER_SIZE = 4096
 
-
-
 def send_request(node_id, data):
     if node_id.upper() not in NODE_PORTS:
-        return {"status": "ERRO", "message": f"ID de nó '{node_id}' desconhecido."}
+        return {"status": "ERRO", "message": "ID desconhecido."}
         
     port = NODE_PORTS[node_id.upper()]
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -31,83 +23,85 @@ def send_request(node_id, data):
         s.connect((IP, port))
         s.sendall(pickle.dumps(data))
         
+        # --- TIMEOUT ATIVADO ---
+        # s.settimeout(5.0)
+        
         full_response = b''
-        # s.settimeout(10.0) 
         while True:
-            chunk = s.recv(BUFFER_SIZE)
-            if not chunk: break
-            full_response += chunk
-            
+            try:
+                chunk = s.recv(BUFFER_SIZE)
+                if not chunk: break
+                full_response += chunk
+            except socket.timeout:
+                break # Se estourar tempo, assume que acabou ou travou
+                
         if full_response:
             return pickle.loads(full_response)
-        return {"status": "ERRO", "message": "Resposta vazia do nó."}
+        return {"status": "ERRO", "message": "Sem resposta."}
         
-    except ConnectionRefusedError:
-        return {"status": "ERRO", "message": f"Não foi possível conectar ao nó {node_id} ({port})."}
-    except socket.timeout:
-        return {"status": "ERRO", "message": "Tempo limite de resposta excedido."}
     except Exception as e:
-        return {"status": "ERRO", "message": f"Erro inesperado: {e}"}
+        return {"status": "ERRO", "message": f"Erro de conexão: {e}"}
     finally:
         s.close()
 
 def main():
-    node_id = NODE_TO_SEND_REQ
-    command = COMMAND
-    dir = os.path.dirname(os.path.abspath(__file__)) + '\\'
-    file_path = dir + FILE
-    nome_arquivo = os.path.basename(file_path)
-
-    if command == "upload" and file_path:
+    dir_atual = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(dir_atual, FILE)
+    
+    # --- UPLOAD ---
+    if COMMAND == "upload":
         if not os.path.exists(file_path):
-            print(f"Arquivo não encontrado: {file_path}")
-            return
+            # Cria um arquivo de teste se não existir
+            with open(file_path, 'wb') as f:
+                f.write(b"Conteudo de teste para sistemas distribuidos " * 50)
+            print(f"Arquivo '{FILE}' criado para teste.")
 
         with open(file_path, 'rb') as f:
             content = f.read()
 
         request = {
             "comando": "UPLOAD",
-            "nome_arquivo": nome_arquivo,
+            "nome_arquivo": FILE,
             "conteudo_bytes": content
         }
+        print(f"📦 UPLOAD '{FILE}' -> Nó {NODE_TO_SEND_REQ}...")
+        resp = send_request(NODE_TO_SEND_REQ, request)
+        print(f"Resposta: {resp}")
 
-        print(f"📦 Enviando arquivo '{nome_arquivo}' ({len(content)} bytes) para o Nó {node_id}...")
-        response = send_request(node_id, request)
-        print(f"Resposta do Servidor: {response.get('message', 'Sem mensagem.')}")
-    elif command == "download" and file_path:
+    # --- DOWNLOAD ---
+    elif COMMAND == "download":
         request = {
             "comando": "DOWNLOAD",
-            "nome_arquivo": nome_arquivo
+            "nome_arquivo": FILE
         }
+        print(f"📥 DOWNLOAD '{FILE}' <- Nó {NODE_TO_SEND_REQ}...")
+        resp = send_request(NODE_TO_SEND_REQ, request)
         
-        print(f"📥 Solicitando arquivo '{nome_arquivo}' ao Nó {node_id}...")
-        response = send_request(node_id, request)
-        
-        content = response['conteudo_bytes']
-        with open(f"RECUPERADO_{response['nome_arquivo']}", 'wb') as f:
-            f.write(content)
-        print(f"✅ Arquivo '{nome_arquivo}' recuperado e salvo como 'RECUPERADO_{response['nome_arquivo']}' ({len(content)} bytes).")
-    
-    elif command == "list":
-        request = {"comando": "LISTAR_FRAGMENTOS"}
-
-        print(f"📜 Solicitando lista de arquivos ao Nó {node_id}...")
-        response = send_request(node_id, request)
-        
-        if response.get("status") == "OK":
-            files = response.get('files', [])
-            if files:
-                print("\n--- Arquivos Disponíveis no Sistema ---")
-                for f in sorted(files):
-                    print(f"- {f}")
-                print("--------------------------------------\n")
-            else:
-                print("Não há arquivos disponíveis no sistema.")
+        if resp.get("status") == "OK":
+            nome_salvo = f"RECUPERADO_{resp['nome_arquivo']}"
+            with open(os.path.join(dir_atual, nome_salvo), 'wb') as f:
+                f.write(resp['conteudo_bytes'])
+            print(f"✅ Sucesso! Salvo como '{nome_salvo}'")
         else:
-            print(f"❌ Erro ao listar: {response.get('message', 'Erro desconhecido')}")
-    else:
-        print(f"Comando '{command}' desconhecido ou faltando argumentos.")
+            print(f"❌ Erro: {resp.get('message')}")
+
+    # --- LISTAR ---
+    elif COMMAND == "list":
+        print(f"📜 LISTANDO arquivos no Nó A...")
+        resp = send_request('A', {"comando": "LISTAR_FRAGMENTOS"})
+        print(resp)
+
+        print(f"📜 LISTANDO arquivos no Nó B...")
+        resp = send_request('B', {"comando": "LISTAR_FRAGMENTOS"})
+        print(resp)
+
+        print(f"📜 LISTANDO arquivos no Nó C...")
+        resp = send_request('C', {"comando": "LISTAR_FRAGMENTOS"})
+        print(resp)
+
+        print(f"📜 LISTANDO arquivos no Nó D...")
+        resp = send_request('D', {"comando": "LISTAR_FRAGMENTOS"})
+        print(resp)
 
 if __name__ == '__main__':
     main()
